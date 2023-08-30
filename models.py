@@ -1,8 +1,23 @@
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from sqlalchemy import Column, Integer, String, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, Table, Text, ForeignKey
 
 Base = declarative_base()
+
+
+book_author_association = Table(
+    'book_author',
+    Base.metadata,
+    Column('book_id', Integer, ForeignKey('book.Id')),
+    Column('author_id', Integer, ForeignKey('author.Id'))
+)
+
+book_genre_association = Table(
+    'book_genre',
+    Base.metadata,
+    Column('book_id', Integer, ForeignKey('book.Id')),
+    Column('genre_id', Integer, ForeignKey('genres.Id'))
+)
 
 
 class Publisher(Base):
@@ -25,7 +40,8 @@ class Book(Base):
     publisher = relationship("Publisher", back_populates="book")
     description = Column('Description', Text)
     thumbnail = Column('Thumbnail', String)
-    authors = relationship("Author", secondary='BookAuthor', back_populates="book")
+    authors = relationship("Author", secondary=book_author_association, back_populates="books")
+    genre = relationship("Genre", secondary=book_genre_association, back_populates="book")
 
     def __repr__(self):
         return f'<Book {self.id} ({self.title} {self.isbn}) {self.pages}>'
@@ -34,9 +50,9 @@ class Book(Base):
 class Author(Base):
     __tablename__ = "author"
 
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), index=True)
-    books = relationship("Book", secondary='BookAuthor', back_populates="author")
+    id = Column('Id', Integer, primary_key=True, index=True)
+    name = Column('Name', String(255), index=True)
+    books = relationship("Book", secondary=book_author_association, back_populates="authors")
 
     def __repr__(self):
         return f'<Author {self.id} ({self.name})>'
@@ -45,9 +61,9 @@ class Author(Base):
 class Genre(Base):
     __tablename__ = "genres"
 
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), index=True)
-    books = relationship("Book", secondary='BookGenre', back_populates="genre")
+    id = Column('Id', Integer, primary_key=True, index=True)
+    name = Column('Name', String(255), index=True)
+    books = relationship("Book", secondary=book_genre_association, back_populates="genres")
 
     def __repr__(self):
         return f'<Genre {self.id} ({self.name})>'
