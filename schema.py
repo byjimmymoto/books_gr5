@@ -3,19 +3,19 @@ from typing import Optional, List, Union, Text
 
 
 class PublisherBase(BaseModel):
-    name: str
-
-
-class PublisherCreate(PublisherBase):
-    name: str
-
-
-class Publisher(PublisherBase):
     id: Optional[int]
     name: str
 
     class Config:
         orm_mode = True
+
+
+class PublisherCreate(PublisherBase):
+    pass
+
+
+class Publisher(PublisherBase):
+    name: str
 
 
 class AuthorBase(BaseModel):
@@ -51,11 +51,15 @@ class Genre(GenreBase):
 
 
 class BookBase(BaseModel):
+    id: Optional[int]
     title: str
     subtitle: str
     publish_date: int
     description: Text
     thumbnail: str
+
+    class Config:
+        orm_mode = True
 
 
 class BookCreate(BookBase):
@@ -63,18 +67,11 @@ class BookCreate(BookBase):
 
 
 class Book(BookBase):
-    id: Optional[int]
-    title: str
-    subtitle: str
-    publish_date: int
-    publisher: Publisher
-    description: Text
-    thumbnail: str
-    authors: List[Author] = []
-    genre: List[Genre] = []
+    publishers: List[Publisher]
+    authors: List[Author]
+    genres: List[Genre]
 
-    class Config:
-        orm_mode = True
+
 
 
 
