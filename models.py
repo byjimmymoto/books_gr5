@@ -1,6 +1,8 @@
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy import Column, Integer, String, Table, Text, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+import uuid
 
 Base = declarative_base()
 
@@ -75,4 +77,45 @@ class Genre(Base):
         return f'<Genre {self.id} ({self.name})>'
 
 
+class TokenSchema(Base):
+    __tablename__ = "tokenschema"
 
+    id = Column('Id', Integer, primary_key=True, index=True)
+    access_token = Column('access_token', String, nullable=False)
+    refresh_token = Column('refresh_token', String, nullable=False)
+
+    def __repr__(self):
+        return f'<TokenSchema {self.id} ({self.access_token})>'
+
+
+class TokenPayload(Base):
+    __tablename__ = "tokenpayload"
+
+    id = Column('Id', Integer, primary_key=True, index=True)
+    sub = Column('sub', String, nullable=False)
+    exp = Column('exp', Integer, nullable=False)
+
+    def __repr__(self):
+        return f'<TokenPayload {self.id} ({self.sub})>'
+
+
+class UserAuth(Base):
+    __tablename__ = "userauth"
+
+    id = Column('Id', Integer, primary_key=True, index=True)
+    email = Column('email', String, nullable=False)
+    password = Column('password', String, nullable=False)
+
+    def __repr__(self):
+        return f'<UserAuth {self.id} ({self.email})>'
+
+
+class UserOut(Base):
+    __tablename__ = "userout"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column('email', String, nullable=False)
+    password = Column('password', String, nullable=False)
+
+    def __repr__(self):
+        return f'<UserOut {self.id} ({self.email})>'
