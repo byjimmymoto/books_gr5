@@ -2,7 +2,7 @@ from typing import Union, Any
 from datetime import datetime
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from utils import (
+from .utils import (
     ALGORITHM,
     JWT_SECRET_KEY
 )
