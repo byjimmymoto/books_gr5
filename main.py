@@ -231,7 +231,7 @@ def search_openlibrary(title: str):
 @celery.task
 def search_googlebook(title: str):
     url = "https://www.googleapis.com/books/v1/volumes"
-    response = requests.get(f"{url}?q={title}&maxResults=1&key=AIzaSyCuJz7LrtNMeH3y4P5Q0BERH4DbPlqbJ5Y").json()
+    response = requests.get(f"{url}?q={title}&maxResults=1&key={os.environ['API_GK']}").json()
     book_response = {
         "title": review_response(response['items'][0]['volumeInfo']['title']),
         "subtitle": review_response(response['items'][0]['volumeInfo']['title']),
