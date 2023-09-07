@@ -11,27 +11,32 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from enum import Enum
-from models import Publisher as ModelPublisher
-from schema import Publisher as SchemaPublisher
-from models import Author as ModelAuthor
-from schema import Author as SchemaAuthor
-from models import Genre as ModelGenre
-from schema import Genre as SchemaGenre
-from models import Book as ModelBook
-from schema import Book as SchemaBook
+from models.models import Publisher as ModelPublisher
+from models.schema import Publisher as SchemaPublisher
+from models.models import Author as ModelAuthor
+from models.schema import Author as SchemaAuthor
+from models.models import Genre as ModelGenre
+from models.schema import Genre as SchemaGenre
+from models.models import Book as ModelBook
+from models.schema import Book as SchemaBook
 from dotenv import load_dotenv
 from jwt.utils import get_hashed_password, create_access_token, create_refresh_token, verify_password
-from schema import UserOut, UserAuth, TokenSchema, SystemUser
+from models.schema import UserOut, UserAuth, TokenSchema, SystemUser
 from uuid import uuid4
 from jwt.deps import get_current_user
 from strawberry.fastapi import GraphQLRouter
 from sgraphql.core import Mutation, Query
-from celery import Celery
-import requests
+from location.tags import description, tags_metadata
+from celery_tasks.tasks import search_googlebook, search_openlibrary
 import time
+import logging
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(BASE_DIR, "../.env"))
+
+
+logging.config.fileConfig('logging.conf', disable_existing_loggers=False)
+logger = logging.getLogger(__name__)
 
 
 class Attribute(str, Enum):
@@ -153,7 +158,7 @@ def json_add_email(db_book, email):
     Funcion para adicionar email del usuario que hace la consulta y motor local
     :param db_book: objeto a retornar con los datos del libro
     :param email: email del usuario que genera la consulta
-    :return: objeto de respuesta consolidado
+    :return: objeto de respuesta
     """
     json_compatible_item_data = jsonable_encoder(db_book)
     json_compatible_item_data["usuario"] = email
@@ -175,16 +180,26 @@ def json_add_data(data, email, engine):
     return JSONResponse(content=json_compatible_item_data)
 
 
-def review_response(response):
-    try:
-        return response
-    except KeyError:
-        return ""
-
-
 schema = strawberry.Schema(query=Query, mutation=Mutation)
 graphql_app = GraphQLRouter(schema)
-app = FastAPI()
+
+app = FastAPI(
+    title="Book GR5",
+    description=description,
+    version="1.0.0",
+    openapi_tags=tags_metadata,
+    docs_url="/documentation",
+    redoc_url=None,
+    contact={
+        "name": "Jaime Alberto Martínez",
+        "url": "https://www.linkedin.com/in/jaime-alberto-martinez-martinez/",
+        "email": "jimmymoto26@gmail.com",
+    },
+    license_info={
+        "name": "Apache 2.0",
+        "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
+    },
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -196,101 +211,61 @@ app.add_middleware(
 app.add_middleware(DBSessionMiddleware, db_url=os.environ["DATABASE_URL"])
 app.include_router(graphql_app, prefix="/sgraphql", tags=["sgraphql"])
 
-celery = Celery(
-    "main",
-    broker="redis://127.0.0.1:6379/0",
-    backend="redis://127.0.0.1:6379/0"
-)
-
-
-@celery.task
-def search_openlibrary(title: str):
-    url = "https://openlibrary.org/search.json"
-    response = requests.get(f"{url}?title={title}&fields=*,availability&limit=1").json()
-    book_response = {
-        "title": review_response(response['docs'][0]['title']),
-        "subtitle": review_response(response['docs'][0]['title_sort']),
-        "publish_date": review_response(response['docs'][0]['publish_year'][0]),
-        "description": ' '.join(review_response(response['docs'][0]['subject'])),
-        "thumbnail": f"https://covers.openlibrary.org/b/isbn/{review_response(response['docs'][0]['isbn'][1])}-S.jpg",
-        "publisher": review_response(response['docs'][0]['publisher_facet'][0]),
-        "authors": [
-            {
-                "name": review_response(response['docs'][0]['author_name'][0])
-            }
-        ],
-        "genres": [
-            {
-                "name": review_response(response['docs'][0]['subject_key'][0])
-            }
-        ]
-    }
-    return book_response
-
-
-@celery.task
-def search_googlebook(title: str):
-    url = "https://www.googleapis.com/books/v1/volumes"
-    response = requests.get(f"{url}?q={title}&maxResults=1&key={os.environ['API_GK']}").json()
-    book_response = {
-        "title": review_response(response['items'][0]['volumeInfo']['title']),
-        "subtitle": review_response(response['items'][0]['volumeInfo']['title']),
-        "publish_date": review_response(response['items'][0]['volumeInfo']['publishedDate']),
-        "description": review_response(response['items'][0]['volumeInfo']['description']),
-        "thumbnail": review_response(response['items'][0]['volumeInfo']['imageLinks']['smallThumbnail']),
-        "publisher": review_response(response['items'][0]['volumeInfo']['publisher']),
-        "authors": [
-            {
-                "name": review_response(response['items'][0]['volumeInfo']['authors'][0])
-            }
-        ],
-        "genres": [
-            {
-                "name": review_response(response['items'][0]['volumeInfo']['categories'][0])
-            }
-        ]
-    }
-    return book_response
-
 
 @app.get('/', response_class=RedirectResponse, include_in_schema=False)
 async def docs():
-    return RedirectResponse(url='/docs')
+    """
+    Redirección a url de openapi con nombre personalizado
+    :return: url redirigida
+    """
+    logger.info("redireccion a url documentacion")
+    return RedirectResponse(url='/documentation')
 
 
-@app.post('/signup', summary="Create new user", response_model=UserOut)
+@app.post('/signup', summary="Crear usuario nuevo", response_model=UserOut, tags=['JWT'])
 async def create_user(data: UserAuth):
-    # querying database to check if user already exist
-    from models import UserOut
+    """
+    Creación de usuario nuevo
+    :param data: datos de autenticación
+    :return: usuario creado
+    """
+    logger.info("creacion de usuario")
+    from models.models import UserOut
     user = db.session.query(UserOut).filter(UserOut.email == data.email).first()
     if user is not None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User with this email already exist"
+            detail="Usuario existente"
         )
     user = UserOut(
         id=str(uuid4()), email=data.email, password=get_hashed_password(data.password)
     )
     db.session.add(user)
-    db.session.commit() # saving user to database
+    db.session.commit()
     return user
 
 
-@app.post('/login', summary="Create access and refresh tokens for user", response_model=TokenSchema)
+@app.post('/login', summary="Crear acceso y refrescar token por usuario", response_model=TokenSchema, tags=['JWT'])
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    from models import UserOut
+    """
+    Endpoint de logueo de usuario y refresco de token
+    :param form_data: datos de usuario
+    :return: access token y refresh token
+    """
+    logger.info("inicio sesion usuario")
+    from models.models import UserOut
     user = db.session.query(UserOut).filter(UserOut.email == form_data.username).first()
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect email or password"
+            detail="Email o password incorrecto"
         )
 
     hashed_pass = user.password
     if not verify_password(form_data.password, hashed_pass):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect email or password"
+            detail="Email o password incorrecto"
         )
 
     return {
@@ -299,28 +274,53 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     }
 
 
-@app.get('/me', summary='Get details of currently logged in user', response_model=UserOut)
+@app.get('/me', summary='Detalles de usuario logueado', response_model=UserOut, tags=['JWT'])
 async def get_me(user: SystemUser = Depends(get_current_user)):
+    """
+    Endpoint de prueba de funcionamiento de acceso JWT
+    :param user: Consulta los datos almacenados del usuario
+    :return: email del usuario
+    """
+    logger.info("Consulta funcionamiento usuario")
     return user
 
 
-@app.get("/books/", response_model=List[SchemaBook], response_model_exclude_unset=True)
+@app.get("/books/", response_model=List[SchemaBook], response_model_exclude_unset=True, tags=['Book_local'])
 async def read_books(skip: int = 0, limit: int = 100, user: SystemUser = Depends(get_current_user)):
+    """
+    Endpoint de busqueda de libros creados en la base de datos local
+    :param skip: registro de inicio
+    :param limit: limite de registros
+    :param user: usuario que usa el endpoint
+    :return: listado de libros en base de datos local
+    """
     books = get_books(skip=skip, limit=limit)
     json_compatible_item_data = jsonable_encoder(books + [user.email])
     return JSONResponse(content=json_compatible_item_data)
 
 
-@app.get("/book/{book_id}", response_model=SchemaBook)
+@app.get("/book/{book_id}", response_model=SchemaBook, tags=['Book_local'])
 async def read_book(book_id: int, user: SystemUser = Depends(get_current_user)):
+    """
+    Endpoint para consulta de libro por id
+    :param book_id: id del libro
+    :param user: usuario que realiza la consulta
+    :return: objeto con el libro
+    """
     db_book = get_book(book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     return json_add_email(db_book, user.email)
 
 
-@app.post("/book/", response_model=SchemaBook)
+@app.post("/book/", response_model=SchemaBook, tags=['Book_local'])
 async def create_book(book: SchemaBook, user: SystemUser = Depends(get_current_user)):
+    """
+    Endpoint de creacion de libro
+    :param book: Diccionario con los datos del libro a crear
+    :param user: usuario que realiza la consulta
+    :return: objeto con el libro
+    """
     db_publisher = list(map(add_publishers, book.publishers)) if len(book.publishers) > 0 else []
     db_authors = list(map(add_authors, book.authors)) if len(book.authors) > 0 else []
     db_genres = list(map(add_genres, book.genres)) if len(book.genres) > 0 else []
@@ -334,8 +334,15 @@ async def create_book(book: SchemaBook, user: SystemUser = Depends(get_current_u
     return json_add_email(db_book, user.email)
 
 
-@app.put("/book/{book_id}", response_model=SchemaBook,status_code=status.HTTP_200_OK)
+@app.put("/book/{book_id}", response_model=SchemaBook, status_code=status.HTTP_200_OK, tags=['Book_local'])
 async def update_book(book_id: int, book: SchemaBook, user: SystemUser = Depends(get_current_user)):
+    """
+    Enpoint con la actualizacion de libro existente
+    :param book_id: id libro a actualizar
+    :param book: diccionario con los datos para actualizar
+    :param user: usuario que genera la actualización
+    :return: objeto con el libro
+    """
     db_book = db.session.query(ModelBook).filter(ModelBook.id == book_id).first()
     db_book.title = book.title
     db_book.subtitle = book.subtitle
@@ -348,17 +355,30 @@ async def update_book(book_id: int, book: SchemaBook, user: SystemUser = Depends
     return json_add_email(db_book, user.email)
 
 
-@app.delete("/book/{book_id}", response_model=SchemaBook)
+@app.delete("/book/{book_id}", response_model=SchemaBook, tags=['Book_local'])
 async def delete_book(book_id: int, user: SystemUser = Depends(get_current_user)):
+    """
+    Endpoint para eliminación de libro por id
+    :param book_id: id del libro
+    :param user: usuario que genera la eliminación
+    :return: objeto eliminado
+    """
     db_book = get_delete_book(book_id=book_id)
     if db_book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     return json_add_email(db_book, user.email)
 
 
-@app.get("/search_attibutes/", response_model=SchemaBook)
+@app.get("/search_attibutes/", response_model=SchemaBook, tags=['API_Books'])
 async def read_attribute(text_attr: str, attribute: Attribute = Attribute.title,
                          user: SystemUser = Depends(get_current_user)):
+    """
+    Endpoint para consulta de libro por medio de parametros y que usa dos API si no esta local
+    :param text_attr: Atributo de texto a buscar
+    :param attribute: tipo de atributo a buscar
+    :param user: usuario que genera la busqueda
+    :return: objeto con el registro encontrado
+    """
     search_book = get_search_book(attribute.value, text_attr)
     openlibrary = search_openlibrary.delay(text_attr)
     bookgoogle = search_googlebook.delay(text_attr)
@@ -375,8 +395,14 @@ async def read_attribute(text_attr: str, attribute: Attribute = Attribute.title,
     return json_add_email(search_book, user.email)
 
 
-@app.post("/author/", response_model=SchemaAuthor)
+@app.post("/author/", response_model=SchemaAuthor, tags=['Book_local'])
 def create_author(author: SchemaAuthor, user: SystemUser = Depends(get_current_user)):
+    """
+    Endpoint para crear autor
+    :param author: diccionario con los datos del autor
+    :param user: usuario que realiza el uso del endpoint
+    :return: objeto creado
+    """
     db_user = ModelAuthor(
         name=author.name
     )
@@ -385,8 +411,14 @@ def create_author(author: SchemaAuthor, user: SystemUser = Depends(get_current_u
     return json_add_email(db_user, user.email)
 
 
-@app.post("/genre/", response_model=SchemaGenre)
+@app.post("/genre/", response_model=SchemaGenre, tags=['Book_local'])
 def create_genre(genre: SchemaGenre, user: SystemUser = Depends(get_current_user)):
+    """
+    Endpoint para crear genero
+    :param genre: diccionario con los datos del genero
+    :param user: usuario que realiza el uso del endpoint
+    :return: objeto creado
+    """
     db_user = ModelGenre(
         name=genre.name
     )
@@ -395,8 +427,14 @@ def create_genre(genre: SchemaGenre, user: SystemUser = Depends(get_current_user
     return json_add_email(db_user, user.email)
 
 
-@app.post("/publisher/", response_model=SchemaPublisher)
+@app.post("/publisher/", response_model=SchemaPublisher, tags=['Book_local'])
 def create_publisher(publisher: SchemaPublisher, user: SystemUser = Depends(get_current_user)):
+    """
+    Endpoint para crear editor
+    :param publisher: diccionario con los datos del editor
+    :param user: usuario que realiza el uso del endpoint
+    :return: objeto creado
+    """
     db_user = ModelPublisher(
         name=publisher.name
     )
@@ -405,5 +443,4 @@ def create_publisher(publisher: SchemaPublisher, user: SystemUser = Depends(get_
     return json_add_email(db_user, user.email)
 
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
