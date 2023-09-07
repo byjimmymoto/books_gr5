@@ -1,6 +1,6 @@
 # books_gr5
 ### API REST con la finalidad de dar solución a los siguientes retos:
-![JWT](images/book_gr5.png)
+![JWT](images/book_gr5.png) 
 
 
 
